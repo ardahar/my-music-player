@@ -1,0 +1,233 @@
+import os
+import requests
+from flask import Flask, render_template_string, jsonify, Response, stream_with_context
+
+app = Flask(__name__)
+
+# ================================
+# 🔧 ТВОИ ДАННЫЕ (УЖЕ ВСТАВЛЕНЫ):
+# ================================
+BOT_TOKEN = "8781924744:AAEUpWPYrlhyEQV0SbPypyqX6spXOSj9qMo"
+CHANNEL_ID = "-1003766063842"
+# ================================
+
+HTML_PAGE = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Player</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { 
+            background: #1c1c1e; 
+            color: white; 
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
+            padding: 20px; 
+            margin: 0;
+            padding-bottom: 100px;
+        }
+        .track { 
+            background: #2c2c2e; 
+            padding: 15px; 
+            margin-bottom: 10px; 
+            border-radius: 12px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            transition: transform 0.2s;
+        }
+        .track:active {
+            transform: scale(0.98);
+        }
+        .track-info {
+            flex: 1;
+            overflow: hidden;
+        }
+        .track-title {
+            font-weight: 600;
+            font-size: 16px;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .track-artist {
+            color: #888;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .play-btn { 
+            background: #007aff; 
+            border: none; 
+            color: white; 
+            width: 50px;
+            height: 50px;
+            border-radius: 50%; 
+            cursor: pointer; 
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-left: 15px;
+            flex-shrink: 0;
+        }
+        .playing { 
+            background: #30d158; 
+        }
+        h1 { 
+            text-align: center; 
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+        .loading { 
+            text-align: center; 
+            color: #888; 
+            padding: 40px 20px;
+        }
+        .player-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #2c2c2e;
+            padding: 15px;
+            border-top: 1px solid #3a3a3c;
+        }
+        audio {
+            width: 100%;
+        }
+        .error {
+            background: #ff3b30;
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎵 Rap Music Territory</h1>
+    <div id="player-container"><div class="loading">Загрузка треков...</div></div>
+    <div class="player-container">
+        <audio id="audio-player" controls style="display: none;"></audio>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        async function loadTracks() {
+            try {
+                const res = await fetch('/api/tracks');
+                const tracks = await res.json();
+                const container = document.getElementById('player-container');
+                container.innerHTML = '';
+                
+                if (tracks.length === 0) {
+                    container.innerHTML = '<div class="loading">Нет аудиотреков в канале<br><small>Загрузи музыку как "Аудио" (не документ)</small></div>';
+                    return;
+                }
+                
+                tracks.forEach((track, index) => {
+                    const div = document.createElement('div');
+                    div.className = 'track';
+                    div.innerHTML = `
+                        <div class="track-info">
+                            <div class="track-title">${track.title || 'Без названия'}</div>
+                            <div class="track-artist">${track.artist || 'Неизвестно'}</div>
+                        </div>
+                        <button class="play-btn" onclick="playTrack('${track.file_id}', this)">▶</button>
+                    `;
+                    container.appendChild(div);
+                });
+            } catch(e) {
+                document.getElementById('player-container').innerHTML = '<div class="error">Ошибка загрузки<br><small>' + e.message + '</small></div>';
+            }
+        }
+
+        function playTrack(fileId, btn) {
+            const audio = document.getElementById('audio-player');
+            document.querySelectorAll('.play-btn').forEach(b => {
+                b.innerText = '▶';
+                b.classList.remove('playing');
+            });
+            btn.innerText = '⏸';
+            btn.classList.add('playing');
+            audio.style.display = 'block';
+            audio.src = '/api/play/' + fileId;
+            audio.play();
+        }
+
+        loadTracks();
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_PAGE)
+
+@app.route('/api/tracks')
+def get_tracks():
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    resp = requests.get(url).json()
+    
+    tracks = []
+    seen_ids = set()
+    
+    if resp.get('ok'):
+        for update in resp.get('result', []):
+            msg = update.get('channel_post')
+            if not msg:
+                continue
+            if str(msg.get('chat', {}).get('id')) != str(CHANNEL_ID):
+                continue
+                
+            if 'audio' in msg:
+                audio = msg['audio']
+                file_id = audio['file_id']
+                if file_id not in seen_ids:
+                    seen_ids.add(file_id)
+                    tracks.append({
+                        'file_id': file_id,
+                        'title': audio.get('title', 'Без названия'),
+                        'artist': audio.get('performer', 'Неизвестно'),
+                        'duration': audio.get('duration', 0)
+                    })
+            elif 'voice' in msg:
+                voice = msg['voice']
+                file_id = voice['file_id']
+                if file_id not in seen_ids:
+                    seen_ids.add(file_id)
+                    tracks.append({
+                        'file_id': file_id,
+                        'title': 'Голосовое сообщение',
+                        'artist': '',
+                        'duration': voice.get('duration', 0)
+                    })
+    
+    return jsonify(tracks[::-1])
+
+@app.route('/api/play/<file_id>')
+def play_file(file_id):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
+    resp = requests.get(url).json()
+    
+    if resp.get('ok'):
+        file_path = resp['result']['file_path']
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        
+        with requests.get(file_url, stream=True, headers={'User-Agent': 'Mozilla/5.0'}) as r:
+            return Response(stream_with_context(r.iter_content(chunk_size=8192)), content_type=r.headers.get('Content-Type', 'audio/mpeg'))
+            
+    return jsonify({"error": "File not found"}), 404
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
